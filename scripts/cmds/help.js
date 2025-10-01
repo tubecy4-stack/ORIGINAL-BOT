@@ -4,7 +4,8 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
-const GIF_URL = "https://i.imgur.com/UbHt7ij.gif";
+// New GIF URL
+const GIF_URL = "https://i.imgur.com/6ktJPac.gif";
 const GIF_PATH = path.join(__dirname, "help.gif");
 
 // Simple fuzzy search for suggestion
@@ -159,17 +160,4 @@ function roleTextToString(role) {
 // Download gif if not exists
 function downloadGif(url, dest) {
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
-    https.get(url, (res) => {
-      if (res.statusCode !== 200) {
-        fs.unlink(dest, () => {});
-        return reject(new Error(`Failed to get '${url}' (${res.statusCode})`));
-      }
-      res.pipe(file);
-      file.on("finish", () => file.close(resolve));
-    }).on("error", (err) => {
-      fs.unlink(dest, () => {});
-      reject(err);
-    });
-  });
-}
+    const file 
