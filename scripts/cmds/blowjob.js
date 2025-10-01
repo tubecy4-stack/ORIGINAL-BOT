@@ -5,6 +5,7 @@ const path = require("path");
 module.exports = {
   config: {
     name: "blowjob",
+aliases: ["bjob"],
     aliases: [],
     version: "1.1",
     author: "NeoKEX",
