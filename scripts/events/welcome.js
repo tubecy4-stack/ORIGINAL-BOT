@@ -1,26 +1,21 @@
 const { getTime, drive } = global.utils;
+const Canvas = require("canvas");
+const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
+
 if (!global.temp.welcomeEvent)
 	global.temp.welcomeEvent = {};
 
 module.exports = {
 	config: {
 		name: "welcome",
-		version: "1.7",
-		author: "NTKhang",
+		version: "2.0",
+		author: "NTKhang + Modified by ChatGPT",
 		category: "events"
 	},
 
 	langs: {
-		vi: {
-			session1: "sáng",
-			session2: "trưa",
-			session3: "chiều",
-			session4: "tối",
-			welcomeMessage: "Cảm ơn bạn đã mời tôi vào nhóm!\nPrefix bot: %1\nĐể xem danh sách lệnh hãy nhập: %1help",
-			multiple1: "bạn",
-			multiple2: "các bạn",
-			defaultWelcomeMessage: "Xin chào {userName}.\nChào mừng bạn đến với {boxName}.\nChúc bạn có buổi {session} vui vẻ!"
-		},
 		en: {
 			session1: "morning",
 			session2: "noon",
@@ -34,99 +29,147 @@ module.exports = {
 	},
 
 	onStart: async ({ threadsData, message, event, api, getLang }) => {
-		if (event.logMessageType == "log:subscribe")
-			return async function () {
-				const hours = getTime("HH");
-				const { threadID } = event;
-				const { nickNameBot } = global.GoatBot.config;
-				const prefix = global.utils.getPrefix(threadID);
-				const dataAddedParticipants = event.logMessageData.addedParticipants;
-				// if new member is bot
-				if (dataAddedParticipants.some((item) => item.userFbId == api.getCurrentUserID())) {
-					if (nickNameBot)
-						api.changeNickname(nickNameBot, threadID, api.getCurrentUserID());
-					return message.send(getLang("welcomeMessage", prefix));
+		if (event.logMessageType != "log:subscribe") return;
+		return async function () {
+			const hours = getTime("HH");
+			const { threadID } = event;
+			const prefix = global.utils.getPrefix(threadID);
+			const dataAddedParticipants = event.logMessageData.addedParticipants;
+
+			// যদি bot কে add করে
+			if (dataAddedParticipants.some((item) => item.userFbId == api.getCurrentUserID())) {
+				return message.send(getLang("welcomeMessage", prefix));
+			}
+
+			if (!global.temp.welcomeEvent[threadID])
+				global.temp.welcomeEvent[threadID] = {
+					joinTimeout: null,
+					dataAddedParticipants: []
+				};
+
+			global.temp.welcomeEvent[threadID].dataAddedParticipants.push(...dataAddedParticipants);
+			clearTimeout(global.temp.welcomeEvent[threadID].joinTimeout);
+
+			global.temp.welcomeEvent[threadID].joinTimeout = setTimeout(async function () {
+				const threadData = await threadsData.get(threadID);
+				if (threadData.settings.sendWelcomeMessage == false) return;
+
+				const dataAddedParticipants = global.temp.welcomeEvent[threadID].dataAddedParticipants;
+				const threadName = threadData.threadName;
+				const userName = [], mentions = [];
+				let multiple = false;
+
+				if (dataAddedParticipants.length > 1) multiple = true;
+
+				for (const user of dataAddedParticipants) {
+					userName.push(user.fullName);
+					mentions.push({ tag: user.fullName, id: user.userFbId });
 				}
-				// if new member:
-				if (!global.temp.welcomeEvent[threadID])
-					global.temp.welcomeEvent[threadID] = {
-						joinTimeout: null,
-						dataAddedParticipants: []
-					};
+				if (userName.length == 0) return;
 
-				// push new member to array
-				global.temp.welcomeEvent[threadID].dataAddedParticipants.push(...dataAddedParticipants);
-				// if timeout is set, clear it
-				clearTimeout(global.temp.welcomeEvent[threadID].joinTimeout);
+				let { welcomeMessage = getLang("defaultWelcomeMessage") } = threadData.data;
+				const form = { mentions: welcomeMessage.match(/\{userNameTag\}/g) ? mentions : null };
 
-				// set new timeout
-				global.temp.welcomeEvent[threadID].joinTimeout = setTimeout(async function () {
-					const threadData = await threadsData.get(threadID);
-					if (threadData.settings.sendWelcomeMessage == false)
-						return;
-					const dataAddedParticipants = global.temp.welcomeEvent[threadID].dataAddedParticipants;
-					const dataBanned = threadData.data.banned_ban || [];
-					const threadName = threadData.threadName;
-					const userName = [],
-						mentions = [];
-					let multiple = false;
+				welcomeMessage = welcomeMessage
+					.replace(/\{userName\}|\{userNameTag\}/g, userName.join(", "))
+					.replace(/\{boxName\}|\{threadName\}/g, threadName)
+					.replace(/\{multiple\}/g, multiple ? getLang("multiple2") : getLang("multiple1"))
+					.replace(/\{session\}/g, hours <= 10 ? getLang("session1") : hours <= 12 ? getLang("session2") : hours <= 18 ? getLang("session3") : getLang("session4"));
 
-					if (dataAddedParticipants.length > 1)
-						multiple = true;
+				form.body = welcomeMessage;
 
+				// যদি custom attachment থাকে
+				if (threadData.data.welcomeAttachment) {
+					const files = threadData.data.welcomeAttachment;
+					const attachments = files.reduce((acc, file) => {
+						acc.push(drive.getFile(file, "stream"));
+						return acc;
+					}, []);
+					form.attachment = (await Promise.allSettled(attachments))
+						.filter(({ status }) => status == "fulfilled")
+						.map(({ value }) => value);
+				}
+
+				// === Welcome Card যুক্ত করা ===
+				try {
 					for (const user of dataAddedParticipants) {
-						if (dataBanned.some((item) => item.id == user.userFbId))
-							continue;
-						userName.push(user.fullName);
-						mentions.push({
-							tag: user.fullName,
-							id: user.userFbId
-						});
+						const memberCount = (await api.getThreadInfo(threadID)).participantIDs.length;
+						const cardBuffer = await makeWelcomeCard(user.fullName, user.userFbId, threadName, memberCount);
+						if (cardBuffer) {
+							const filePath = path.join(__dirname, `welcome_${user.userFbId}.png`);
+							fs.writeFileSync(filePath, cardBuffer);
+							if (!form.attachment) form.attachment = [];
+							form.attachment.push(fs.createReadStream(filePath));
+							// পাঠানোর পর delete
+							setTimeout(() => fs.unlinkSync(filePath), 5000);
+						}
 					}
-					// {userName}:   name of new member
-					// {multiple}:
-					// {boxName}:    name of group
-					// {threadName}: name of group
-					// {session}:    session of day
-					if (userName.length == 0) return;
-					let { welcomeMessage = getLang("defaultWelcomeMessage") } =
-						threadData.data;
-					const form = {
-						mentions: welcomeMessage.match(/\{userNameTag\}/g) ? mentions : null
-					};
-					welcomeMessage = welcomeMessage
-						.replace(/\{userName\}|\{userNameTag\}/g, userName.join(", "))
-						.replace(/\{boxName\}|\{threadName\}/g, threadName)
-						.replace(
-							/\{multiple\}/g,
-							multiple ? getLang("multiple2") : getLang("multiple1")
-						)
-						.replace(
-							/\{session\}/g,
-							hours <= 10
-								? getLang("session1")
-								: hours <= 12
-									? getLang("session2")
-									: hours <= 18
-										? getLang("session3")
-										: getLang("session4")
-						);
+				} catch (e) {
+					console.error("Card error:", e);
+				}
+				// ==============================
 
-					form.body = welcomeMessage;
-
-					if (threadData.data.welcomeAttachment) {
-						const files = threadData.data.welcomeAttachment;
-						const attachments = files.reduce((acc, file) => {
-							acc.push(drive.getFile(file, "stream"));
-							return acc;
-						}, []);
-						form.attachment = (await Promise.allSettled(attachments))
-							.filter(({ status }) => status == "fulfilled")
-							.map(({ value }) => value);
-					}
-					message.send(form);
-					delete global.temp.welcomeEvent[threadID];
-				}, 1500);
-			};
+				message.send(form);
+				delete global.temp.welcomeEvent[threadID];
+			}, 1500);
+		};
 	}
 };
+
+// === Card তৈরি করার ফাংশন ===
+async function makeWelcomeCard(userName, uid, boxName, memberCount) {
+	try {
+		const width = 1365, height = 600;
+		const canvas = Canvas.createCanvas(width, height);
+		const ctx = canvas.getContext("2d");
+
+		// Background
+		try {
+			const bgImg = await Canvas.loadImage("https://i.imgur.com/6i4etFf.jpeg");
+			ctx.drawImage(bgImg, 0, 0, width, height);
+		} catch {
+			ctx.fillStyle = "#5565d6";
+			ctx.fillRect(0, 0, width, height);
+		}
+
+		// Avatar
+		let avatarImg = null;
+		try {
+			const res = await axios.get(
+				`https://kaiz-apis.gleeze.com/api/facebookpfp?uid=${uid}&apikey=66e0cfbb-62b8-4829-90c7-c78cacc72ae2`,
+				{ responseType: "arraybuffer", timeout: 8000 }
+			);
+			avatarImg = await Canvas.loadImage(Buffer.from(res.data));
+		} catch { avatarImg = null; }
+
+		const avatarSize = 220;
+		const avatarX = width / 2;
+		const avatarY = height * 0.33;
+
+		ctx.save();
+		ctx.beginPath();
+		ctx.arc(avatarX, avatarY, avatarSize / 2, 0, Math.PI * 2);
+		ctx.closePath();
+		ctx.clip();
+		if (avatarImg) ctx.drawImage(avatarImg, avatarX - avatarSize / 2, avatarY - avatarSize / 2, avatarSize, avatarSize);
+		ctx.restore();
+
+		// Text
+		ctx.textAlign = "center";
+		ctx.fillStyle = "#41E7FF";
+		ctx.font = "bold 64px 'Segoe UI', Arial";
+		ctx.fillText(userName, avatarX, avatarY + avatarSize / 2 + 70);
+
+		ctx.fillStyle = "#fff";
+		ctx.font = "600 36px 'Segoe UI', Arial";
+		ctx.fillText(`Welcome to ${boxName}`, avatarX, avatarY + avatarSize / 2 + 120);
+
+		ctx.font = "500 32px 'Segoe UI', Arial";
+		ctx.fillText(`You're the ${memberCount} member`, avatarX, avatarY + avatarSize / 2 + 165);
+
+		return canvas.toBuffer("image/png");
+	} catch (err) {
+		console.error("[makeWelcomeCard] error:", err);
+		return null;
+	}
+}
