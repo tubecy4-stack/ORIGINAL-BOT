@@ -125,7 +125,7 @@ async function makeWelcomeCard(userName, uid, boxName, memberCount) {
 
 		// Background
 		try {
-			const bgImg = await Canvas.loadImage("https://i.imgur.com/6i4etFf.jpeg");
+			const bgImg = await Canvas.loadImage("https://i.imgur.com/rOiUKdi.jpeg");
 			ctx.drawImage(bgImg, 0, 0, width, height);
 		} catch {
 			ctx.fillStyle = "#5565d6";
