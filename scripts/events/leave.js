@@ -139,7 +139,7 @@ async function makeLeaveCard(userName, boxName, memberCount) {
 
 		// Background
 		try {
-			const bgImg = await Canvas.loadImage("https://i.imgur.com/M2EMIxT.jpeg"); // leave background
+			const bgImg = await Canvas.loadImage("https://i.imgur.com/R1X6qoy.jpeg"); // leave background
 			ctx.drawImage(bgImg, 0, 0, width, height);
 		} catch {
 			ctx.fillStyle = "#2C2F33";
