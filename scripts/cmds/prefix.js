@@ -101,3 +101,13 @@ module.exports = {
 			};
 	}
 };
+
+
+// Background
+		try {
+			const bgImg = await Canvas.loadImage("https://i.imgur.com/R1X6qoy.jpeg");
+			ctx.drawImage(bgImg, 0, 0, width, height);
+		} catch {
+			ctx.fillStyle = "#5565d6";
+			ctx.fillRect(0, 0, width, height);
+}
